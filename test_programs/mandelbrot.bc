@@ -1,0 +1,82 @@
+main :: () => {
+    let width = 100;
+    let height = 100;
+
+    let mut x = 0;
+    let mut y = 0;
+
+
+    while y < height {
+        while x < width {
+            let qx = (x << 16) / (width  / 4) - 2;
+            let qy = (y << 16) / (height / 4) - 2;
+            let c = (qx, qy);
+
+            let iterations = escape_iterations(c);
+            let address = y * width + height;
+            put_pixel(address as u32, iterations);
+
+            x = x + 1;
+        }
+        x = 0;
+        y = y + 1;
+    }
+}
+
+
+put_pixel :: (address u32, iterations usize) => {
+    let g_address = (-65536 as u32 + 4) cast *mut u32;
+    let g_data = (-65536 as u32 + 4) cast *mut u32;
+    let mut iterations = iterations cast u32;
+    iterations = (iterations << 16) / 100 * 64;
+    iterations = iterations >> 16;
+
+    *g_address = address;
+    *g_data = iterations;
+}
+
+escape_iterations :: (c (i32, i32)) usize => {
+    let max_iterations: usize = 100;
+    let mut i: usize = 0;
+    let mut z = (0, 0);
+    let mut escaped = false;
+
+    while i < max_iterations && !escaped {
+        if abs_above_2(z) {
+            escaped = true;    
+        }
+
+        z = mandelbrot_iteration(z, c);
+        i = i + 1;
+    }
+
+    i - 1
+}
+
+mandelbrot_iteration :: (z (i32, i32), c (i32, i32)) (i32, i32) => {
+    let squared = square_complex_q16(z);
+    let sum = (squared.0 + c.0, squared.1 + c.1);
+    sum
+}
+
+abs_above_2 :: (x (i32, i32)) bool => {
+    let abs_squared = square_q16(x.0) + square_q16(x.1);
+    let four = 4 << 16;
+    abs_squared >= 4
+}
+
+square_complex_q16 :: (x (i32, i32), y (i32, i32)) (i32, i32) => {
+    let new_real = square_q16(x.0) - square_q16(y.0);
+    let new_imag = 2 * mul_q16(x.1, y.1);
+    (new_real, new_imag)
+}
+
+square_q16 :: (a i32) i32 => mul_q16(a, a);
+
+mul_q16 :: (a i32, b i32) i32 => {
+    let a = a cast i64;
+    let b = b cast i64;
+    let product = a * b;
+    let scaled = a >> 16;
+    scaled cast i32
+}
