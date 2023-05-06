@@ -31,6 +31,8 @@ pub enum TokenKind<'a> {
     OpenCurly,
     #[token("}")]
     CloseCurly,
+    #[token("@")]
+    At,
 
     #[token("=")]
     Equal,

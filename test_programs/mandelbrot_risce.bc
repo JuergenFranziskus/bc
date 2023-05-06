@@ -1,0 +1,99 @@
+main :: () => {
+    let width = 100u32;
+    let height = 100u32;
+    let mut x = 0u32;
+    let mut y = 0u32;
+
+    while y < height {
+        while x < width {
+            let c = scale_coordinates(x, y, width, height);
+            let pixel = escapes(c);
+            put_pixel(x, y, width, pixel);
+
+            x = x + 1;
+        }
+        x = 0;
+        y = y + 1;
+    }
+}
+
+put_pixel :: (x u32, y u32, width u32, pixel bool) => {
+    let pixel = pixel cast u8;
+    let index = y * width + x;
+
+    let peripherals = -65536 as u32;
+    let g_address = (peripherals + 4) cast *mut u32;
+    let g_data = (peripherals + 8) cast *mut u8;
+
+    @storevolatile(g_address, index);
+    @storevolatile(g_data, pixel);
+}
+
+
+
+scale_coordinates :: (x u32, y u32, width u32, height u32) (i32, i32) => {
+    let x = (x as i32 << 16) + (1 << 15);
+    let y = (y as i32 << 16) + (1 << 15);
+
+    let x = x / width as i32;
+    let y = y / height as i32;
+
+    let x = x * 3 - (2 << 16);
+    let y = y * 2 - (2 << 16);
+
+    let y = (y * 5) >> 2;
+    
+    (x, y)
+}
+
+
+
+abs_greater_2 :: (x (i32, i32)) bool => {
+    let c_squared = mul_q16(x.0) + mul_q16(x.1);
+    
+    c_squared > (4 << 16)
+}
+
+
+
+escapes :: (c (i32, i32)) bool => {
+    let max_iterations = 20;
+    let mut iteration = 0;
+    let mut escaped = false;
+    let mut z = (0, 0);
+
+
+    while iteration < max_iterations && !escaped {
+        if abs_greater_2(z) {
+            escaped = true;
+        }
+        z = mandelbrot_iteration(z, c);
+        iteration = iteration + 1;
+    }
+
+    escaped
+}
+
+
+mandelbrot_iteration :: (z (i32, i32), c (i32, i32)) (i32, i32) => {
+    let z = square_complex_q16(z);
+    let real = z.0 + c.0;
+    let imag = z.1 + c.1;
+
+    (real, imag)
+}
+
+
+square_complex_q16 :: (x (i32, i32)) (i32, i32) => {
+    let real = square_q16(x.0) - square_q16(x.1);
+    let imag = 2 * mul_q16(x.0, x.1);
+    (real, imag)
+}
+
+square_q16 :: (x i32) i32 => mul_q16(x, x);
+
+mul_q16 :: (x i32, y i32) i32 => {
+    let x = x cast i64;
+    let y = y cast i64;
+    ((x * y) >> 16) cast i32
+}

@@ -1,7 +1,7 @@
-use super::ast::{BinaryOp, Expr, ExprKind, Function, IntSuffix, PrefixOp, TypeExpr, TypeExprKind};
-use super::expr_tree::{
-    ConversionKind, Expr as EExpr, ExprKind as EExprKind, Function as EFunction,
+use super::ast::{
+    BinaryOp, Expr, ExprKind, Function, IntSuffix, Intrinsic, PrefixOp, TypeExpr, TypeExprKind,
 };
+use super::expr_tree::{Expr as EExpr, ExprKind as EExprKind, Function as EFunction};
 use super::symbols::function::FunctionID;
 use super::symbols::value_kind::ValueKind;
 use super::symbols::variable::VarID;
@@ -87,6 +87,7 @@ impl<'a> TypeChecker<'a> {
             &ExprKind::TupleIndex(ref tuple, len) => self.check_tuple_index(tuple, len),
             ExprKind::Index(arr, index) => self.check_index(arr, index),
             ExprKind::Call(func, args) => self.check_call(func, args),
+            &ExprKind::Intrinsic(intrinsic, ref args) => self.check_intrinsic(intrinsic, args),
             &ExprKind::Declaration(name, mutable, ref t, ref init) => {
                 self.check_declaration(name, mutable, t.as_deref(), init)
             }
@@ -215,6 +216,29 @@ impl<'a> TypeChecker<'a> {
             kind: EExprKind::Call(func.into(), args),
         }
     }
+    fn check_intrinsic(&mut self, intrinsic: Intrinsic, args: &[Expr<'a>]) -> EExpr {
+        let args: Vec<_> = args.iter().map(|a| self.check_expr(a)).collect();
+        match intrinsic {
+            Intrinsic::VolatileStore => self.check_volatile_store(args),
+        }
+    }
+    fn check_volatile_store(&mut self, mut args: Vec<EExpr>) -> EExpr {
+        assert_eq!(args.len(), 2);
+        let value = args.pop().unwrap();
+        let ptr = args.pop().unwrap();
+
+        let Type::Pointer(id) = ptr.expr_type else { panic!() };
+        assert!(self.types[id].mutable());
+        let pointee = self.types[id].pointee();
+        assert!(pointee.is_sized());
+        let value = self.coerce(value, pointee);
+
+        EExpr {
+            expr_type: Type::Unit,
+            value_kind: ValueKind::RValue,
+            kind: EExprKind::VolatileStore(ptr.into(), value.into()),
+        }
+    }
     fn check_declaration(
         &mut self,
         name: &'a str,
@@ -267,7 +291,7 @@ impl<'a> TypeChecker<'a> {
         EExpr {
             expr_type: to,
             value_kind: ValueKind::RValue,
-            kind: EExprKind::Conversion(a.into(), ConversionKind::BitCast),
+            kind: EExprKind::Conversion(a.into()),
         }
     }
     fn can_bitcast(&self, from: Type, to: Type) -> bool {
@@ -289,14 +313,13 @@ impl<'a> TypeChecker<'a> {
     fn check_cast(&mut self, a: &Expr<'a>, to: &TypeExpr) -> EExpr {
         let to = self.check_type_expr(to);
         let a = self.check_expr(a);
-        let a = self.make_literal_concrete(a);
 
         assert!(self.can_cast(a.expr_type, to));
 
         EExpr {
             expr_type: to,
             value_kind: ValueKind::RValue,
-            kind: EExprKind::Conversion(a.into(), ConversionKind::Cast),
+            kind: EExprKind::Conversion(a.into()),
         }
     }
     fn can_cast(&self, from: Type, to: Type) -> bool {
@@ -307,10 +330,22 @@ impl<'a> TypeChecker<'a> {
         use Type::*;
         match (from, to) {
             (a, b) if a == b => true,
-            (Pointer(_), Pointer(_)) => true,
+            (Pointer(f), Pointer(t)) => {
+                let fp = self.types[f].pointee();
+                let tp = self.types[t].pointee();
+                match (fp, tp) {
+                    (Slice(_), Slice(_)) => true,
+                    (_, Slice(_)) => false,
+                    _ => true,
+                }
+            }
             (Pointer(_), Integer(_)) => true,
-            (Integer(_), Pointer(_)) => true,
+            (Integer(_), Pointer(id)) => {
+                let pointee = self.types[id].pointee();
+                !matches!(pointee, Type::Slice(_))
+            }
             (Integer(_), Integer(_)) => true,
+            (Literal(_), Integer(_)) => true,
             (Integer(_), Bool) => true,
             (Bool, Integer(_)) => true,
 
@@ -1083,6 +1118,7 @@ impl<'a> TypeChecker<'a> {
     fn check_short_array(&mut self, init: &Expr<'a>, length: &Expr<'a>) -> EExpr {
         let length = self.eval_const(length).try_into().unwrap();
         let init = self.check_expr(init);
+        let init = self.make_literal_concrete(init);
         let arr_type = self.types.add_array_type(init.expr_type, length);
 
         EExpr {
@@ -1181,6 +1217,10 @@ impl<'a> TypeChecker<'a> {
     fn coerce(&self, e: EExpr, into: impl Into<Type>) -> EExpr {
         let into = into.into();
 
+        if e.expr_type == into {
+            return e;
+        }
+
         assert!(
             self.can_coerce(e.expr_type, into),
             "Cannot coerce {:?} into {into:?}",
@@ -1190,7 +1230,7 @@ impl<'a> TypeChecker<'a> {
         EExpr {
             expr_type: into,
             value_kind: ValueKind::RValue,
-            kind: EExprKind::Conversion(Box::new(e), ConversionKind::Coerce),
+            kind: EExprKind::Conversion(Box::new(e)),
         }
     }
     fn can_coerce(&self, from: Type, to: Type) -> bool {
@@ -1231,7 +1271,7 @@ impl<'a> TypeChecker<'a> {
             return true;
         }
 
-        if from_pointee.is_void() || to_pointee.is_void() {
+        if to_pointee.is_void() {
             return true;
         }
 

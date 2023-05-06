@@ -61,8 +61,9 @@ pub enum ExprKind {
     AddrOf(Box<Expr>),
     AddrOfMut(Box<Expr>),
     Deref(Box<Expr>),
+    VolatileStore(Box<Expr>, Box<Expr>),
 
-    Conversion(Box<Expr>, ConversionKind),
+    Conversion(Box<Expr>),
 
     Paren(Box<Expr>),
     Call(Box<Expr>, Vec<Expr>),
@@ -81,11 +82,4 @@ pub enum ExprKind {
     Decimal(i128),
     Boolean(bool),
     Unit,
-}
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum ConversionKind {
-    Coerce,
-    BitCast,
-    Cast,
 }

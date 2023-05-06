@@ -1,3 +1,5 @@
+use crate::frontend::ast::Intrinsic;
+
 use super::{
     ast::{
         Ast, BinaryOp, Expr, ExprKind, Function, FunctionParameter, IntSuffix, PrefixOp, TypeExpr,
@@ -167,9 +169,9 @@ impl<'a, 'b> Parser<'a, 'b> {
             TokenKind::Tilde => PrefixOp::BitNot,
             TokenKind::Exclamation => PrefixOp::Not,
             TokenKind::Ampersand => {
-                self.next();
-                let mutable = self.is(TokenKind::MutKeyword);
+                let mutable = self.peek_is(TokenKind::MutKeyword);
                 if mutable {
+                    self.next();
                     PrefixOp::AddrOfMut
                 } else {
                     PrefixOp::AddrOf
@@ -246,6 +248,7 @@ impl<'a, 'b> Parser<'a, 'b> {
     }
     fn parse_leaf_expr(&mut self) -> Expr<'a> {
         match self.curr().kind {
+            TokenKind::At => self.parse_intrinsic_expr(),
             TokenKind::MakeSliceKeyword => self.parse_make_slice(),
             TokenKind::SLenKeyword => self.parse_slice_len(),
             TokenKind::OpenParen => self.parse_paren_expr(),
@@ -258,6 +261,32 @@ impl<'a, 'b> Parser<'a, 'b> {
             TokenKind::Identifier(_) => self.parse_identifier_expr(),
             TokenKind::TrueKeyword | TokenKind::FalseKeyword => self.parse_boolean_expr(),
             _ => panic!("Expected leaf expression, found {:?}", self.curr()),
+        }
+    }
+    fn parse_intrinsic_expr(&mut self) -> Expr<'a> {
+        let start = self.consume(TokenKind::At);
+        let (name, _) = self.parse_identifier();
+        let intrinsic = match name {
+            "storevolatile" => Intrinsic::VolatileStore,
+            _ => panic!(),
+        };
+
+        let mut args = Vec::new();
+        self.consume(TokenKind::OpenParen);
+        while !self.is(TokenKind::CloseParen) {
+            args.push(self.parse_expr());
+            if self.is(TokenKind::Comma) {
+                self.next();
+            } else {
+                break;
+            }
+        }
+        let end = self.consume(TokenKind::CloseParen);
+        let span = Span::merge(start, end);
+
+        Expr {
+            span,
+            kind: ExprKind::Intrinsic(intrinsic, args),
         }
     }
     fn parse_while_expr(&mut self) -> Expr<'a> {
@@ -567,6 +596,9 @@ impl<'a, 'b> Parser<'a, 'b> {
     }
     fn is(&self, kind: TokenKind) -> bool {
         !self.at_end() && self.curr().kind == kind
+    }
+    fn peek_is(&self, kind: TokenKind) -> bool {
+        self.try_peek(1).map(|t| t.kind == kind).unwrap_or(false)
     }
 
     fn at_end(&self) -> bool {

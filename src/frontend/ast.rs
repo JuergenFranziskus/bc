@@ -53,6 +53,7 @@ pub enum ExprKind<'a> {
     TupleIndex(Box<Expr<'a>>, u64),
     Index(Box<Expr<'a>>, Box<Expr<'a>>),
     Call(Box<Expr<'a>>, Vec<Expr<'a>>),
+    Intrinsic(Intrinsic, Vec<Expr<'a>>),
     Declaration(&'a str, bool, Option<Box<TypeExpr<'a>>>, Box<Expr<'a>>),
 
     BitCast(Box<Expr<'a>>, Box<TypeExpr<'a>>),
@@ -186,6 +187,11 @@ pub enum PrefixOp {
     AddrOf,
     AddrOfMut,
     Deref,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum Intrinsic {
+    VolatileStore,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
