@@ -115,9 +115,11 @@ impl<'a> CodeGen<'a> {
             ExprKind::TestGreater(a, b) => self.build_test_greater(a, b),
             ExprKind::TestLessEqual(a, b) => self.build_test_less_equal(a, b),
             ExprKind::TestGreaterEqual(a, b) => self.build_test_greater_equal(a, b),
-            ExprKind::And(a, b) | ExprKind::BitAnd(a, b) => self.build_and(a, b),
-            ExprKind::Or(a, b) | ExprKind::BitOr(a, b) => self.build_or(a, b),
-            ExprKind::BitXor(a, b) => self.build_xor(a, b),
+            ExprKind::And(a, b) => self.build_and(a, b),
+            ExprKind::Or(a, b) => self.build_or(a, b),
+            ExprKind::BitAnd(a, b) => self.build_bitand(a, b),
+            ExprKind::BitOr(a, b) => self.build_bitor(a, b),
+            ExprKind::BitXor(a, b) => self.build_bitxor(a, b),
             ExprKind::SliceLength(ptr) => self.build_slice_length(ptr),
             ExprKind::MakeSlice(ptr, size) => self.build_make_slice(ptr, size),
 
@@ -317,15 +319,40 @@ impl<'a> CodeGen<'a> {
         Value::RValue(reg.into())
     }
     fn build_and(&mut self, a: &Expr, b: &Expr) -> Value {
+        let true_branch = self.builder.add_block();
+        let end_branch = self.builder.add_block();
+
         let a = self.build_expr(a);
         let a = self.make_rvalue(a);
+        self.builder.branch(a, true_branch, (end_branch, false));
+
+        self.builder.select_block(true_branch);
         let b = self.build_expr(b);
         let b = self.make_rvalue(b);
+        self.builder.jump((end_branch, b));
 
-        let reg = self.builder.and(a, b);
-        Value::RValue(reg.into())
+        self.builder.select_block(end_branch);
+        let value = self.builder.add_block_param(IntegerSize::make(1));
+        Value::RValue(value.into())
     }
     fn build_or(&mut self, a: &Expr, b: &Expr) -> Value {
+        let false_branch = self.builder.add_block();
+        let end_branch = self.builder.add_block();
+
+        let a = self.build_expr(a);
+        let a = self.make_rvalue(a);
+        self.builder.branch(a, (end_branch, true), false_branch);
+
+        self.builder.select_block(false_branch);
+        let b = self.build_expr(b);
+        let b = self.make_rvalue(b);
+        self.builder.jump((end_branch, b));
+
+        self.builder.select_block(end_branch);
+        let value = self.builder.add_block_param(IntegerSize::make(1));
+        Value::RValue(value.into())
+    }
+    fn build_bitand(&mut self, a: &Expr, b: &Expr) -> Value {
         let a = self.build_expr(a);
         let a = self.make_rvalue(a);
         let b = self.build_expr(b);
@@ -334,7 +361,16 @@ impl<'a> CodeGen<'a> {
         let reg = self.builder.or(a, b);
         Value::RValue(reg.into())
     }
-    fn build_xor(&mut self, a: &Expr, b: &Expr) -> Value {
+    fn build_bitor(&mut self, a: &Expr, b: &Expr) -> Value {
+        let a = self.build_expr(a);
+        let a = self.make_rvalue(a);
+        let b = self.build_expr(b);
+        let b = self.make_rvalue(b);
+
+        let reg = self.builder.or(a, b);
+        Value::RValue(reg.into())
+    }
+    fn build_bitxor(&mut self, a: &Expr, b: &Expr) -> Value {
         let a = self.build_expr(a);
         let a = self.make_rvalue(a);
         let b = self.build_expr(b);
@@ -544,7 +580,7 @@ impl<'a> CodeGen<'a> {
 
             let reg = self
                 .builder
-                .call_ptr(ptr, return_type, args, Default::default());
+                .call_ptr(ptr, return_type, args, Default::default(), false);
             Value::RValue(reg.into())
         }
     }
