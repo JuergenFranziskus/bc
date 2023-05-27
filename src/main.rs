@@ -1,10 +1,9 @@
 use std::io::stdout;
-
 use bc::{
     code_gen::{CodeGen, TargetInfo},
     frontend::{lexer::lex, parser::Parser, type_checker::TypeChecker},
 };
-use cir::printing::Printer;
+use cir::{printing::Printer, IntSize};
 
 fn main() {
     let src = std::fs::read_to_string("test_programs/mandelbrot_risce.bc").unwrap();
@@ -16,8 +15,8 @@ fn main() {
         &symbols,
         &types,
         TargetInfo {
-            size_bits: 64,
-            ptr_bits: 64,
+            size: IntSize::Long,
+            ptr: IntSize::Long,
         },
     )
     .gen_code(&expr_tree);

@@ -3,17 +3,17 @@ use crate::frontend::{
     symbols::{function::FunctionID, variable::VarID, Symbols},
     types::{pointer_type::PointerTypeID, IntType, RegularIntKind, SpecialIntKind, Type, Types},
 };
-use cir::instruction::Expr as CExpr;
+use cir::{instruction::Expr as CExpr, function::FunctionSignature};
 use cir::variable::VarID as CVarID;
 use cir::{
-    function::FuncID, instruction::ConstValue, register::RegID, Builder, IntegerSize, Module,
+    function::FuncID, instruction::ConstValue, register::RegID, Builder, IntSize, Module,
     Type as CType, Types as CTypes,
 };
 use std::collections::HashMap;
 
 pub struct TargetInfo {
-    pub size_bits: u32,
-    pub ptr_bits: u32,
+    pub size: IntSize,
+    pub ptr: IntSize,
 }
 
 pub struct CodeGen<'a> {
@@ -332,7 +332,7 @@ impl<'a> CodeGen<'a> {
         self.builder.jump((end_branch, b));
 
         self.builder.select_block(end_branch);
-        let value = self.builder.add_block_param(IntegerSize::make(1));
+        let value = self.builder.add_block_param(CType::Bool);
         Value::RValue(value.into())
     }
     fn build_or(&mut self, a: &Expr, b: &Expr) -> Value {
@@ -349,7 +349,7 @@ impl<'a> CodeGen<'a> {
         self.builder.jump((end_branch, b));
 
         self.builder.select_block(end_branch);
-        let value = self.builder.add_block_param(IntegerSize::make(1));
+        let value = self.builder.add_block_param(CType::Bool);
         Value::RValue(value.into())
     }
     fn build_bitand(&mut self, a: &Expr, b: &Expr) -> Value {
@@ -392,8 +392,8 @@ impl<'a> CodeGen<'a> {
         let ptr = self.make_rvalue(ptr);
         let size = self.make_rvalue(size);
 
-        let structure = CExpr::Struct(vec![ptr, size]);
-        Value::RValue(structure)
+        let structure = self.builder.make_struct(vec![ptr, size]);
+        Value::RValue(structure.into())
     }
     fn build_negate(&mut self, a: &Expr) -> Value {
         let a = self.build_expr(a);
@@ -492,7 +492,7 @@ impl<'a> CodeGen<'a> {
                     let f_type = self.make_type(f_element.into());
                     let size = CExpr::Constant(ConstValue::SizeOf(
                         f_type,
-                        IntegerSize::make(self.target.size_bits),
+                        self.target.size,
                     ));
                     len = self.builder.mul(len, size);
                 }
@@ -500,19 +500,19 @@ impl<'a> CodeGen<'a> {
                     let t_type = self.make_type(t_element.into());
                     let size = CExpr::Constant(ConstValue::SizeOf(
                         t_type,
-                        IntegerSize::make(self.target.size_bits),
+                        self.target.size,
                     ));
                     len = self.builder.udiv(len, size);
                 }
 
-                CExpr::Struct(vec![ptr.into(), len.into()])
+                self.builder.make_struct(vec![ptr.into(), len.into()]).into()
             }
             (Slice(_), _) => todo!(),
             (Array(f), Slice(t)) => {
                 let len = self.types[f].length();
                 let mut len = CExpr::Constant(ConstValue::Integer(
                     len.into(),
-                    IntegerSize::make(self.target.size_bits),
+                    self.target.size,
                 ));
 
                 let f_element = self.types[f].member();
@@ -522,7 +522,7 @@ impl<'a> CodeGen<'a> {
                     let f_type = self.make_type(f_element.into());
                     let size = CExpr::Constant(ConstValue::SizeOf(
                         f_type,
-                        IntegerSize::make(self.target.size_bits),
+                        self.target.size,
                     ));
                     len = self.builder.mul(len, size).into();
                 }
@@ -530,12 +530,12 @@ impl<'a> CodeGen<'a> {
                     let t_type = self.make_type(t_element.into());
                     let size = CExpr::Constant(ConstValue::SizeOf(
                         t_type,
-                        IntegerSize::make(self.target.size_bits),
+                        self.target.size,
                     ));
                     len = self.builder.udiv(len, size).into();
                 }
 
-                CExpr::Struct(vec![ptr.into(), len])
+                self.builder.make_struct(vec![ptr.into(), len]).into()
             }
             (_, Slice(_)) => unreachable!(),
             _ => from_value,
@@ -574,13 +574,23 @@ impl<'a> CodeGen<'a> {
             let Type::Function(id) = func.expr_type else { panic!() };
             let return_type = self.types[id].return_type();
             let return_type = self.make_type(return_type);
+            let parameter_types: Vec<_> = self.types[id].parameter_types().iter()
+                .map(|t| self.make_type(*t))
+                .collect();
+            let signature = FunctionSignature {
+                return_type,
+                parameter_types,
+                calling_convention: Default::default(),
+                vararg: false,
+            };
+
             let func = self.build_expr(func);
             let func = self.make_rvalue(func);
             let CExpr::Register(ptr) = func else { panic!() };
 
             let reg = self
                 .builder
-                .call_ptr(ptr, return_type, args, Default::default(), false);
+                .call_ptr(ptr, return_type, args, signature);
             Value::RValue(reg.into())
         }
     }
@@ -700,7 +710,7 @@ impl<'a> CodeGen<'a> {
             })
             .collect();
 
-        Value::RValue(CExpr::Struct(values))
+        Value::RValue(self.builder.make_struct(values).into())
     }
     fn build_array(&mut self, values: &[Expr]) -> Value {
         let values = values
@@ -711,12 +721,12 @@ impl<'a> CodeGen<'a> {
             })
             .collect();
 
-        Value::RValue(CExpr::Array(values))
+        Value::RValue(self.builder.make_array(values).into())
     }
     fn build_short_array(&mut self, value: &Expr, length: u64) -> Value {
         let value = self.build_expr(value);
         let value = self.make_rvalue(value);
-        Value::RValue(CExpr::ShortArray(value.into(), length))
+        Value::RValue(self.builder.make_short_array(value, length).into())
     }
     fn build_variable(&mut self, id: VarID) -> Value {
         let ir_id = self.get_ir_var(id);
@@ -732,13 +742,12 @@ impl<'a> CodeGen<'a> {
     fn build_decimal(&mut self, value: i128) -> Value {
         Value::RValue(CExpr::Constant(ConstValue::Integer(
             value,
-            IntegerSize::make(64),
+            IntSize::Long,
         )))
     }
     fn build_boolean(&mut self, value: bool) -> Value {
-        Value::RValue(CExpr::Constant(ConstValue::Integer(
-            value as i128,
-            IntegerSize::make(1),
+        Value::RValue(CExpr::Constant(ConstValue::Bool(
+            value
         )))
     }
     fn build_unit(&mut self) -> Value {
@@ -756,7 +765,7 @@ impl<'a> CodeGen<'a> {
         match t {
             Type::Void => panic!(),
             Type::Unit => CType::Unit,
-            Type::Bool => CType::integer(1),
+            Type::Bool => CType::Bool,
             Type::Integer(int) => self.make_int_type(int).into(),
             Type::Literal(_) => panic!(),
             Type::Slice(_) => panic!(),
@@ -779,21 +788,21 @@ impl<'a> CodeGen<'a> {
                     Type::Slice(_) => self
                         .builder
                         .types_mut()
-                        .make_struct(vec![CType::Pointer, CType::integer(self.target.size_bits)])
+                        .make_struct(vec![CType::Pointer, CType::Integer(self.target.size)])
                         .into(),
                     _ => CType::Pointer,
                 }
             }
         }
     }
-    fn make_int_type(&self, t: IntType) -> IntegerSize {
+    fn make_int_type(&self, t: IntType) -> IntSize {
         match t {
-            IntType::Special(SpecialIntKind::Size, _) => IntegerSize::make(self.target.size_bits),
-            IntType::Special(SpecialIntKind::Ptr, _) => IntegerSize::make(self.target.ptr_bits),
-            IntType::Regular(RegularIntKind::Byte, _) => IntegerSize::make(8),
-            IntType::Regular(RegularIntKind::Short, _) => IntegerSize::make(16),
-            IntType::Regular(RegularIntKind::Int, _) => IntegerSize::make(32),
-            IntType::Regular(RegularIntKind::Long, _) => IntegerSize::make(64),
+            IntType::Special(SpecialIntKind::Size, _) =>  self.target.size,
+            IntType::Special(SpecialIntKind::Ptr, _) =>   self.target.ptr,
+            IntType::Regular(RegularIntKind::Byte, _) =>  IntSize::Byte,
+            IntType::Regular(RegularIntKind::Short, _) => IntSize::Short,
+            IntType::Regular(RegularIntKind::Int, _) =>   IntSize::Int,
+            IntType::Regular(RegularIntKind::Long, _) =>  IntSize::Long,
         }
     }
 }
